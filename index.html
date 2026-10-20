@@ -94,22 +94,16 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
 
   <div class="cele" id="cele" role="status" hidden></div>
 
+  <section class="slip" id="yt">
+    <h2>Real YouTube counts</h2>
+    <ul id="ytList"></ul>
+    <p class="muted" id="ytNote" style="margin:10px 0 8px" role="status">Loading counts from YouTube...</p>
+    <button class="go" id="ytRefresh" type="button">Refresh counts</button>
+  </section>
+
   <section class="big" aria-live="polite">
     <div><b id="bigPeople">0</b><span>in the party</span></div>
     <div><b id="bigLive">0</b><span>here right now</span></div>
-  </section>
-
-  <section class="slip" id="room">
-    <h2>Live Streaming Party Room</h2>
-    <p class="muted" id="cdLabel" style="margin:0">No party scheduled yet</p>
-    <div class="cdnum" id="cdNum" aria-live="off">--</div>
-    <p class="muted" id="cdWhen" style="margin:4px 0 0"></p>
-  </section>
-
-  <section class="slip" id="yt" hidden>
-    <h2>Real YouTube counts</h2>
-    <ul id="ytList"></ul>
-    <p class="muted" id="ytNote" style="margin:10px 0 0"></p>
   </section>
 
   <section class="slip" id="goals">
@@ -120,6 +114,11 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
     <p class="muted" id="gtext" style="margin:0 0 12px"></p>
     <div class="ms" id="ms"></div>
     <p class="muted" id="gUpdated" style="margin:10px 0 0">Fandom-wide progress. Views are updated by the organizer from YouTube.</p>
+    <div style="margin-top:12px">
+      <button class="go" id="gEditBtn" type="button">Change goal</button>
+      <div class="crow" id="gEditRow" hidden style="margin-top:8px"><input type="text" id="gEditIn" inputmode="decimal" maxlength="12" placeholder="New goal, e.g. 200000 or 250K" autocomplete="off"><button class="go" id="gEditSave" type="button">Save</button></div>
+      <p class="muted" id="gEditMsg" style="margin:8px 0 0" role="status"></p>
+    </div>
   </section>
 
   <section class="slip">
@@ -143,7 +142,7 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
       <div id="links"></div>
       <p class="muted" id="linkState" style="margin:8px 0 0">The organizer hasn’t added a link yet.</p>
     </div>
-    <p class="muted" style="margin:0 0 8px">Step 2: enter your name or nickname once. After that your name is locked and each watch adds to your count.</p>
+    <p class="muted" style="margin:0 0 8px">Step 2: enter your name or nickname once. After that your name is locked.</p>
     <label for="name" class="muted">Name or nickname</label>
     <input type="text" id="name" maxlength="40" autocomplete="nickname" placeholder="e.g. Ate Mai">
     <p style="margin:10px 0 0"><button class="go" id="join" type="button">Join</button></p>
@@ -161,9 +160,8 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
 <script>
 (function(){
   // To show real YouTube counts, paste a YouTube Data API v3 key below (restrict it to your site in Google Cloud).
-  var YT_API_KEY="";
+  var YT_API_KEY="AIzaSyD3137clf8gONOX4b60uee_6SCRFBkI-ps";
   var YT_VIDEOS=[{id:"eeSfA8cdTY0",label:"Episode 1"},{playlist:"PLSdh20BL4mb0",nth:1,label:"Episode 2"},{id:"iSS_D2wBYVI",label:"Paborito (Wish 107.5 Bus)"}];
-  var sessionAt=null; // set from the database; the group streams whenever they are free
   var SUPABASE_URL="https://ntcdqdfhblmcgbypnkwk.supabase.co", SUPABASE_KEY="sb_publishable_9mQYTiI4h0Nr2Sjb1qVJ6A_9W9Wojsk";
   var $=function(id){return document.getElementById(id);};
   function el(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!==undefined)e.textContent=x; return e;}
@@ -179,15 +177,16 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
   function buildLinks(){
     var box=$("links"); box.innerHTML=""; anchors=[];
     links.forEach(function(u,i){
-      var a=el("a","go","Open link "+(i+1)); a.href=u; a.target="_blank"; a.rel="noopener noreferrer"; a.style.margin="0 8px 8px 0";
+      var a=el("a","go",(links.length===1?"Open playlist":"Open link "+(i+1))); a.href=u; a.target="_blank"; a.rel="noopener noreferrer"; a.style.margin="0 8px 8px 0";
       a.addEventListener("click",function(){ opened[u]=true; ls(OK,JSON.stringify(opened)); setTimeout(refreshJoin,0); });
       box.appendChild(a); anchors.push(a);
     });
   }
   function refreshJoin(){
-    links.forEach(function(u,i){ if(anchors[i]) anchors[i].textContent="Open link "+(i+1)+(opened[u]?" ✓":""); });
+    links.forEach(function(u,i){ if(anchors[i]) anchors[i].textContent=(links.length===1?"Open playlist":"Open link "+(i+1))+(opened[u]?" ✓":""); });
     var n=links.filter(function(u){return opened[u];}).length;
     $("linkState").textContent=joined?"You’re already in the party.":!links.length?"The organizer hasn’t added a link yet.":(allOpened()?"You’ve opened all the links. You can join now.":"Open all the links to unlock Join ("+n+" of "+links.length+").");
+    $("gEditBtn").disabled=!joined; $("gEditBtn").textContent=joined?"Change goal":"Join to change the goal"; if(!joined) $("gEditRow").hidden=true;
     $("join").disabled=joined||!allOpened();
     $("join").textContent=joined?"You’re in the party":"Join";
     $("name").disabled=joined;
@@ -213,41 +212,73 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
     var b=$("cele"); b.textContent="🎉 "+kfmt(m)+" views reached! Thank you, fandom."; b.hidden=false;
     confetti(); setTimeout(function(){ b.hidden=true; },15000);
   }
+  var YT_TTL=180000, ytBackoff=0;
+  function jget(k){ try{ return JSON.parse(ls(k)||"null"); }catch(e){ return null; } }
   async function resolveIds(){
     for(var i=0;i<YT_VIDEOS.length;i++){
-      var v=YT_VIDEOS[i]; if(v.id||!v.playlist) continue;
+      var v=YT_VIDEOS[i]; if(!v.playlist) continue;
+      if(v.id&&Date.now()-v.idAt<1800000) continue;
+      var c=jget("dboi-ep2");
+      if(c&&c.pl===v.playlist&&c.n===v.nth&&Date.now()-c.t<1800000){ v.id=c.id; v.idAt=c.t; continue; }
       try{
-        var r=await fetch("https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults=50&playlistId="+encodeURIComponent(v.playlist)+"&key="+encodeURIComponent(YT_API_KEY));
-        var j=await r.json(), it=j.items&&j.items[v.nth-1]; if(it&&it.contentDetails) v.id=it.contentDetails.videoId;
+        var r=await fetch("https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults="+v.nth+"&fields=items/contentDetails/videoId&playlistId="+encodeURIComponent(v.playlist)+"&key="+encodeURIComponent(YT_API_KEY));
+        if(r.status===403||r.status===429) ytBackoff=Date.now()+3600000;
+        var j=await r.json(), it=j.items&&j.items[v.nth-1];
+        if(it&&it.contentDetails){ v.id=it.contentDetails.videoId; v.idAt=Date.now(); ls("dboi-ep2",JSON.stringify({pl:v.playlist,n:v.nth,id:v.id,t:v.idAt})); }
       }catch(e){}
     }
   }
-  async function loadYt(){
-    if(!YT_API_KEY||!YT_VIDEOS.length) return;
-    try{
-      await resolveIds(); var vids=YT_VIDEOS.filter(function(v){return v.id;}); if(!vids.length) return; var ids=vids.map(function(v){return v.id;}).join(",");
-      var res=await fetch("https://www.googleapis.com/youtube/v3/videos?part=statistics&id="+ids+"&key="+encodeURIComponent(YT_API_KEY));
-      var j=await res.json(); if(!res.ok||!j.items) throw new Error("yt");
-      var by={}; j.items.forEach(function(it){ by[it.id]=it.statistics||{}; });
-      var ul=$("ytList"); ul.innerHTML="";
-      vids.forEach(function(v){
-        var st=by[v.id]||{}, li=el("li","p"), left=el("div");
-        left.appendChild(el("div","",v.label));
-        var bits=[]; if(st.likeCount) bits.push(Number(st.likeCount).toLocaleString()+" likes"); if(st.commentCount) bits.push(Number(st.commentCount).toLocaleString()+" comments");
-        left.appendChild(el("div","tags",bits.join(", ")));
-        li.appendChild(left);
-        li.appendChild(el("div","ytn",st.viewCount?Number(st.viewCount).toLocaleString():"--"));
-        ul.appendChild(li);
-      });
-      $("ytNote").textContent="Views straight from YouTube. Updated "+new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+".";
-      $("yt").hidden=false;
-    }catch(e){ /* keep the last numbers shown, or stay hidden */ }
+  function paintYt(by,ids,at){
+    var vids=YT_VIDEOS.map(function(v){ return {label:v.label,id:v.id||ids[v.label]}; }).filter(function(v){return v.id;});
+    if(!vids.length) return;
+    var ul=$("ytList"); ul.innerHTML="";
+    vids.forEach(function(v){
+      var st=by[v.id]||{}, li=el("li","p"), left=el("div");
+      left.appendChild(el("div","",v.label));
+      var bits=[]; if(st.likeCount) bits.push(Number(st.likeCount).toLocaleString()+" likes"); if(st.commentCount) bits.push(Number(st.commentCount).toLocaleString()+" comments");
+      left.appendChild(el("div","tags",bits.join(", ")));
+      li.appendChild(left);
+      li.appendChild(el("div","ytn",st.viewCount?Number(st.viewCount).toLocaleString():"--"));
+      ul.appendChild(li);
+    });
+    var tot=0, got=0; vids.forEach(function(v){ if(by[v.id]&&by[v.id].viewCount){ tot+=Number(by[v.id].viewCount); got++; } });
+    if(got===YT_VIDEOS.length){ goalLive=tot; goalAt=at; renderGoal(); }
+    $("ytNote").textContent="Views straight from YouTube. Updated "+new Date(at).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+".";
+    $("yt").hidden=false;
   }
+  async function loadYt(){
+    if(!YT_VIDEOS.length||document.hidden) return;
+    ytPlaceholder();
+    if(!YT_API_KEY){ ytFail("no YouTube key is set on this page"); return; }
+    var c=jget("dboi-yt");
+    if(c&&c.by&&c.ids){ paintYt(c.by,c.ids,c.t); if(Date.now()-c.t<YT_TTL) return; }
+    if(Date.now()<ytBackoff){ if(!c) ytFail("YouTube is limiting requests right now"); return; }
+    try{
+      await resolveIds(); var vids=YT_VIDEOS.filter(function(v){return v.id;}); if(!vids.length){ if(!c) ytFail("could not find the videos"); return; }
+      var ids=vids.map(function(v){return v.id;}).join(",");
+      var res=await fetch("https://www.googleapis.com/youtube/v3/videos?part=statistics&fields=items(id,statistics(viewCount,likeCount,commentCount))&id="+ids+"&key="+encodeURIComponent(YT_API_KEY));
+      if(res.status===403||res.status===429) ytBackoff=Date.now()+3600000;
+      var j=await res.json(); if(!res.ok||!j.items) throw new Error((j.error&&j.error.message)||"YouTube did not answer");
+      var by={}; j.items.forEach(function(it){ by[it.id]=it.statistics||{}; });
+      var map={}; YT_VIDEOS.forEach(function(v){ if(v.id) map[v.label]=v.id; });
+      var now=Date.now(); ls("dboi-yt",JSON.stringify({t:now,by:by,ids:map}));
+      paintYt(by,map,now);
+    }catch(e){ if(!c) ytFail(String(e.message||"").slice(0,140)); else $("ytNote").textContent="Showing the last numbers. YouTube could not be reached just now."; }
+  }
+  function ytPlaceholder(){ var ul=$("ytList"); if(ul.children.length) return; YT_VIDEOS.forEach(function(v){ var li=el("li","p"); li.appendChild(el("div","",v.label)); li.appendChild(el("div","ytn","--")); ul.appendChild(li); }); }
+  function ytFail(msg){ $("ytNote").textContent="Could not load YouTube counts"+(msg?": "+msg:"")+". Tap Refresh counts to try again."; }
+  $("ytRefresh").addEventListener("click",function(){ ls("dboi-yt",null); ytBackoff=0; $("ytNote").textContent="Refreshing..."; loadYt(); });
+  document.addEventListener("visibilitychange",function(){ if(!document.hidden) loadYt(); });
+  var goalRow=null, goalLive=null, goalAt=null;
   async function loadGoal(){
     var r=await sb.from("party_goal").select("title,current_views,target_views,updated_at").eq("id",1).maybeSingle();
     if(r.error||!r.data) return;
-    var g=r.data, cur=Number(g.current_views), tgt=Number(g.target_views);
-    $("gTitle").textContent=g.title||"";
+    goalRow=r.data; renderGoal();
+  }
+  function renderGoal(){
+    if(!goalRow) return;
+    var g=goalRow, live=goalLive!==null, cur=live?goalLive:Number(g.current_views), tgt=Number(g.target_views)||1;
+    $("gTitle").textContent=live?"Delivery Boi: Episode 1, Episode 2 and Wish Bus combined":(g.title||"");
     $("gNow").textContent=cur.toLocaleString(); $("gTarget").textContent=tgt.toLocaleString();
     var pct=Math.min(100,Math.floor(cur/tgt*100));
     $("gfill").style.width=pct+"%"; $("gbar").setAttribute("aria-valuenow",String(pct));
@@ -257,23 +288,11 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
     $("gtext").textContent=t;
     var box=$("ms"); box.innerHTML="";
     MS.forEach(function(m){ box.appendChild(el("div",cur>=m?"done":"",(cur>=m?"🎉 ":"")+kfmt(m))); });
-    $("gUpdated").textContent="Fandom-wide progress. Views are updated by the organizer from YouTube. Updated "+when(g.updated_at)+".";
+    $("gUpdated").textContent=live?"Fandom-wide progress. Views come live from YouTube. Updated "+new Date(goalAt).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+".":"Fandom-wide progress. Updated "+when(g.updated_at)+".";
     var reached=MS.filter(function(m){return cur>=m;}), top=reached.length?reached[reached.length-1]:0;
     var seen=Number(ls("dboi-milestone")||0);
     if(top>seen){ ls("dboi-milestone",String(top)); celebrate(top); }
   }
-
-  function pad(n){return String(n).padStart(2,"0");}
-  function tick(){
-    var now=Date.now(), t=sessionAt, WIN=3*3600000;
-    if(t&&now>=t&&now<t+WIN){ $("cdLabel").textContent="The party is on"; $("cdNum").textContent="STREAMING NOW"; $("cdWhen").textContent="Open the links below and join the party."; return; }
-    if(!t||now>=t+WIN){ $("cdLabel").textContent="No party scheduled yet"; $("cdNum").textContent="TBA"; $("cdWhen").textContent="The group streams together whenever they are free. The time will be posted here."; return; }
-    var s=Math.floor((t-now)/1000), d=Math.floor(s/86400), h=Math.floor(s%86400/3600), mi=Math.floor(s%3600/60), sc=s%60;
-    $("cdLabel").textContent="The party starts in";
-    $("cdNum").textContent=(d?d+"d ":"")+pad(h)+":"+pad(mi)+":"+pad(sc);
-    $("cdWhen").textContent=new Date(t).toLocaleString([],{weekday:"long",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})+" your time";
-  }
-  tick(); setInterval(tick,1000);
 
 
   var still=window.matchMedia&&matchMedia("(prefers-reduced-motion:reduce)").matches;
@@ -298,12 +317,25 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
   }
   async function loadConfig(){
     var r=await sb.from("party_config").select("link").eq("id",1).maybeSingle();
-    if(!r.error&&r.data){ var lines=(r.data.link||"").split(/\s*\n\s*/); links=lines.filter(okLink); var sl=lines.filter(function(x){return /^session=/i.test(x);})[0]; sessionAt=sl?Date.parse(sl.slice(8)):null; if(sessionAt!==null&&isNaN(sessionAt)) sessionAt=null; tick(); buildLinks(); refreshJoin(); }
+    if(!r.error&&r.data){ var lines=(r.data.link||"").split(/\s*\n\s*/); links=lines.filter(okLink); buildLinks(); refreshJoin(); }
   }
   async function loadMe(){
     var r=await sb.rpc("am_i_in_party",{p_device:device});
     if(!r.error){ joined=!!r.data; refreshJoin(); }
   }
+
+  $("gEditBtn").addEventListener("click",function(){ var r=$("gEditRow"); r.hidden=!r.hidden; if(!r.hidden) $("gEditIn").focus(); });
+  $("gEditSave").addEventListener("click",async function(){
+    var m=$("gEditMsg"), raw=$("gEditIn").value.trim().replace(/,/g,""), x=/^(\d+(?:\.\d+)?)\s*([km])?$/i.exec(raw);
+    if(!x){ m.textContent="Type a number, like 200000 or 250K."; return; }
+    var n=Math.round(Number(x[1])*(/k/i.test(x[2]||"")?1000:/m/i.test(x[2]||"")?1000000:1));
+    if(n<10000||n>10000000){ m.textContent="The goal must be between 10,000 and 10,000,000."; return; }
+    $("gEditSave").disabled=true; m.textContent="Saving...";
+    var r=await sb.rpc("set_goal_target",{p_device:device,p_target:n});
+    $("gEditSave").disabled=false;
+    if(r.error){ m.textContent=r.error.message||"Could not change the goal. Try again."; return; }
+    m.textContent="Goal changed to "+n.toLocaleString()+" views."; $("gEditRow").hidden=true; $("gEditIn").value=""; loadGoal();
+  });
 
   $("join").addEventListener("click",async function(){
     if(!allOpened()){ setStatus("Open all the official links before joining.","err"); return; }
@@ -359,7 +391,7 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
   });
   $("name").addEventListener("input",function(){ track(); });
 
-  refreshJoin(); loadConfig(); loadMe(); loadParty(); setInterval(loadParty,15000); loadGoal(); setInterval(loadGoal,30000); loadYt(); setInterval(loadYt,300000);
+  refreshJoin(); loadConfig(); loadMe(); loadParty(); setInterval(loadParty,15000); loadGoal(); setInterval(loadGoal,30000); loadYt(); setInterval(loadYt,YT_TTL);
 })();
 </script>
 </body>
