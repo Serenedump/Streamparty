@@ -108,17 +108,8 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
 
   <section class="slip" id="goals">
     <h2>View Goals Tracker</h2>
-    <p class="muted" id="gTitle" style="margin:0"></p>
-    <div class="gnum"><b id="gNow">0</b> <span>of <b id="gTarget">0</b> views</span></div>
-    <div class="gbar" role="progressbar" aria-label="Fandom-wide progress" aria-valuemin="0" aria-valuemax="100" id="gbar"><i id="gfill"></i></div>
-    <p class="muted" id="gtext" style="margin:0 0 12px"></p>
-    <div class="ms" id="ms"></div>
-    <p class="muted" id="gUpdated" style="margin:10px 0 0">Fandom-wide progress. Views are updated by the organizer from YouTube.</p>
-    <div style="margin-top:12px">
-      <button class="go" id="gEditBtn" type="button">Change goal</button>
-      <div class="crow" id="gEditRow" hidden style="margin-top:8px"><input type="text" id="gEditIn" inputmode="decimal" maxlength="12" placeholder="New goal, e.g. 200000 or 250K" autocomplete="off"><button class="go" id="gEditSave" type="button">Save</button></div>
-      <p class="muted" id="gEditMsg" style="margin:8px 0 0" role="status"></p>
-    </div>
+    <div id="goalCards"></div>
+    <p class="muted" id="gUpdated" style="margin:6px 0 0">Waiting for YouTube counts.</p>
   </section>
 
   <section class="slip">
@@ -186,7 +177,7 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
     links.forEach(function(u,i){ if(anchors[i]) anchors[i].textContent=(links.length===1?"Open playlist":"Open link "+(i+1))+(opened[u]?" ✓":""); });
     var n=links.filter(function(u){return opened[u];}).length;
     $("linkState").textContent=joined?"You’re already in the party.":!links.length?"The organizer hasn’t added a link yet.":(allOpened()?"You’ve opened all the links. You can join now.":"Open all the links to unlock Join ("+n+" of "+links.length+").");
-    $("gEditBtn").disabled=!joined; $("gEditBtn").textContent=joined?"Change goal":"Join to change the goal"; if(!joined) $("gEditRow").hidden=true;
+    renderGoalButtons();
     $("join").disabled=joined||!allOpened();
     $("join").textContent=joined?"You’re in the party":"Join";
     $("name").disabled=joined;
@@ -241,8 +232,7 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
       li.appendChild(el("div","ytn",st.viewCount?Number(st.viewCount).toLocaleString():"--"));
       ul.appendChild(li);
     });
-    var tot=0, got=0; vids.forEach(function(v){ if(by[v.id]&&by[v.id].viewCount){ tot+=Number(by[v.id].viewCount); got++; } });
-    if(got===YT_VIDEOS.length){ goalLive=tot; goalAt=at; renderGoal(); }
+    vids.forEach(function(v){ if(by[v.id]&&by[v.id].viewCount) goalViews[v.label]=Number(by[v.id].viewCount); }); goalAt=at; renderGoals();
     $("ytNote").textContent="Views straight from YouTube. Updated "+new Date(at).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+".";
     $("yt").hidden=false;
   }
@@ -269,29 +259,68 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
   function ytFail(msg){ $("ytNote").textContent="Could not load YouTube counts"+(msg?": "+msg:"")+". Tap Refresh counts to try again."; }
   $("ytRefresh").addEventListener("click",function(){ ls("dboi-yt",null); ytBackoff=0; $("ytNote").textContent="Refreshing..."; loadYt(); });
   document.addEventListener("visibilitychange",function(){ if(!document.hidden) loadYt(); });
-  var goalRow=null, goalLive=null, goalAt=null;
-  async function loadGoal(){
-    var r=await sb.from("party_goal").select("title,current_views,target_views,updated_at").eq("id",1).maybeSingle();
-    if(r.error||!r.data) return;
-    goalRow=r.data; renderGoal();
+  var GOALS=[{key:"ep1",label:"Episode 1"},{key:"ep2",label:"Episode 2"},{key:"wish",label:"Paborito (Wish 107.5 Bus)"}];
+  var goalTargets={}, goalViews={}, goalAt=null, goalUI={};
+  function parseGoal(raw){ var x=/^(\d+(?:\.\d+)?)\s*([km])?$/i.exec(String(raw||"").trim().replace(/,/g,"")); if(!x) return null; return Math.round(Number(x[1])*(/k/i.test(x[2]||"")?1000:/m/i.test(x[2]||"")?1000000:1)); }
+  function buildGoals(){
+    var box=$("goalCards"); box.innerHTML="";
+    GOALS.forEach(function(g){
+      var d=el("div"); d.style.cssText="border-top:1px solid var(--line);padding:12px 0";
+      d.appendChild(el("p","goalt",g.label));
+      var n=el("div","gnum"), now=el("b","","--"), sp=el("span"), tg=el("b","","--");
+      sp.appendChild(document.createTextNode("of ")); sp.appendChild(tg); sp.appendChild(document.createTextNode(" views"));
+      n.appendChild(now); n.appendChild(document.createTextNode(" ")); n.appendChild(sp); d.appendChild(n);
+      var bar=el("div","gbar"), fill=el("i"); bar.setAttribute("role","progressbar"); bar.setAttribute("aria-label",g.label+" progress"); bar.setAttribute("aria-valuemin","0"); bar.setAttribute("aria-valuemax","100"); bar.appendChild(fill); d.appendChild(bar);
+      var tx=el("p","muted","Waiting for YouTube counts."); tx.style.margin="0 0 8px"; d.appendChild(tx);
+      var btn=el("button","go","Change goal"); btn.type="button"; d.appendChild(btn);
+      var row=el("div","crow"); row.hidden=true; row.style.marginTop="8px";
+      var inp=el("input"); inp.type="text"; inp.maxLength=12; inp.placeholder="New goal, e.g. 200000 or 250K"; inp.autocomplete="off"; inp.setAttribute("inputmode","decimal");
+      var sv=el("button","go","Save"); sv.type="button"; row.appendChild(inp); row.appendChild(sv); d.appendChild(row);
+      var msg=el("p","muted"); msg.style.margin="8px 0 0"; msg.setAttribute("role","status"); d.appendChild(msg);
+      btn.addEventListener("click",function(){ row.hidden=!row.hidden; if(!row.hidden) inp.focus(); });
+      sv.addEventListener("click",async function(){
+        var v=parseGoal(inp.value);
+        if(v===null){ msg.textContent="Type a number, like 200000 or 250K."; return; }
+        if(v<10000||v>10000000){ msg.textContent="The goal must be between 10,000 and 10,000,000."; return; }
+        sv.disabled=true; msg.textContent="Saving...";
+        var r=await sb.rpc("set_video_goal",{p_device:device,p_key:g.key,p_target:v});
+        sv.disabled=false;
+        if(r.error){ msg.textContent=r.error.message||"Could not change the goal. Try again."; return; }
+        msg.textContent="Goal changed to "+v.toLocaleString()+" views."; row.hidden=true; inp.value=""; loadGoal();
+      });
+      goalUI[g.key]={now:now,tg:tg,fill:fill,bar:bar,tx:tx,btn:btn,row:row};
+      box.appendChild(d);
+    });
+    renderGoalButtons();
   }
-  function renderGoal(){
-    if(!goalRow) return;
-    var g=goalRow, live=goalLive!==null, cur=live?goalLive:Number(g.current_views), tgt=Number(g.target_views)||1;
-    $("gTitle").textContent=live?"Delivery Boi: Episode 1, Episode 2 and Wish Bus combined":(g.title||"");
-    $("gNow").textContent=cur.toLocaleString(); $("gTarget").textContent=tgt.toLocaleString();
-    var pct=Math.min(100,Math.floor(cur/tgt*100));
-    $("gfill").style.width=pct+"%"; $("gbar").setAttribute("aria-valuenow",String(pct));
-    var next=MS.filter(function(m){return cur<m;})[0], t=pct+"% of the target.";
-    if(cur>=tgt) t="Target reached! Thank you, fandom.";
-    if(next) t+=" Next milestone: "+kfmt(next)+", "+(next-cur).toLocaleString()+" views to go.";
-    $("gtext").textContent=t;
-    var box=$("ms"); box.innerHTML="";
-    MS.forEach(function(m){ box.appendChild(el("div",cur>=m?"done":"",(cur>=m?"🎉 ":"")+kfmt(m))); });
-    $("gUpdated").textContent=live?"Fandom-wide progress. Views come live from YouTube. Updated "+new Date(goalAt).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+".":"Fandom-wide progress. Updated "+when(g.updated_at)+".";
-    var reached=MS.filter(function(m){return cur>=m;}), top=reached.length?reached[reached.length-1]:0;
-    var seen=Number(ls("dboi-milestone")||0);
-    if(top>seen){ ls("dboi-milestone",String(top)); celebrate(top); }
+  function renderGoalButtons(){
+    GOALS.forEach(function(g){ var u=goalUI[g.key]; if(!u) return; u.btn.disabled=!joined; u.btn.textContent=joined?"Change goal":"Join to change the goal"; if(!joined) u.row.hidden=true; });
+  }
+  async function loadGoal(){
+    var r=await sb.from("party_video_goal").select("video_key,target_views").order("video_key");
+    if(r.error||!r.data) return;
+    r.data.forEach(function(x){ goalTargets[x.video_key]=Number(x.target_views); });
+    renderGoals();
+  }
+  function renderGoals(){
+    var best=0, seenAll=[];
+    GOALS.forEach(function(g){
+      var u=goalUI[g.key]; if(!u) return;
+      var tgt=goalTargets[g.key], v=goalViews[g.label];
+      u.tg.textContent=tgt?tgt.toLocaleString():"--";
+      if(v===undefined||!tgt){ u.now.textContent=v===undefined?"--":v.toLocaleString(); return; }
+      u.now.textContent=v.toLocaleString();
+      var pct=Math.min(100,Math.floor(v/tgt*100));
+      u.fill.style.width=pct+"%"; u.bar.setAttribute("aria-valuenow",String(pct));
+      var next=MS.filter(function(m){return v<m;})[0], t=v>=tgt?"Goal reached! Thank you, fandom.":pct+"% of the goal.";
+      if(next) t+=" Next milestone: "+kfmt(next)+", "+(next-v).toLocaleString()+" views to go.";
+      u.tx.textContent=t;
+      var reached=MS.filter(function(m){return v>=m;}), top=reached.length?reached[reached.length-1]:0;
+      var k="dboi-ms-"+g.key, seen=Number(ls(k)||0);
+      if(top>seen){ ls(k,String(top)); if(top>best) best=top; }
+    });
+    if(goalAt) $("gUpdated").textContent="Views come live from YouTube. Updated "+new Date(goalAt).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+".";
+    if(best) celebrate(best);
   }
 
 
@@ -323,19 +352,6 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
     var r=await sb.rpc("am_i_in_party",{p_device:device});
     if(!r.error){ joined=!!r.data; refreshJoin(); }
   }
-
-  $("gEditBtn").addEventListener("click",function(){ var r=$("gEditRow"); r.hidden=!r.hidden; if(!r.hidden) $("gEditIn").focus(); });
-  $("gEditSave").addEventListener("click",async function(){
-    var m=$("gEditMsg"), raw=$("gEditIn").value.trim().replace(/,/g,""), x=/^(\d+(?:\.\d+)?)\s*([km])?$/i.exec(raw);
-    if(!x){ m.textContent="Type a number, like 200000 or 250K."; return; }
-    var n=Math.round(Number(x[1])*(/k/i.test(x[2]||"")?1000:/m/i.test(x[2]||"")?1000000:1));
-    if(n<10000||n>10000000){ m.textContent="The goal must be between 10,000 and 10,000,000."; return; }
-    $("gEditSave").disabled=true; m.textContent="Saving...";
-    var r=await sb.rpc("set_goal_target",{p_device:device,p_target:n});
-    $("gEditSave").disabled=false;
-    if(r.error){ m.textContent=r.error.message||"Could not change the goal. Try again."; return; }
-    m.textContent="Goal changed to "+n.toLocaleString()+" views."; $("gEditRow").hidden=true; $("gEditIn").value=""; loadGoal();
-  });
 
   $("join").addEventListener("click",async function(){
     if(!allOpened()){ setStatus("Open all the official links before joining.","err"); return; }
@@ -391,7 +407,7 @@ button.go:disabled{opacity:.45;cursor:not-allowed}
   });
   $("name").addEventListener("input",function(){ track(); });
 
-  refreshJoin(); loadConfig(); loadMe(); loadParty(); setInterval(loadParty,15000); loadGoal(); setInterval(loadGoal,30000); loadYt(); setInterval(loadYt,YT_TTL);
+  buildGoals(); refreshJoin(); loadConfig(); loadMe(); loadParty(); setInterval(loadParty,15000); loadGoal(); setInterval(loadGoal,60000); loadYt(); setInterval(loadYt,YT_TTL);
 })();
 </script>
 </body>
